@@ -1,1 +1,1 @@
-# Device_twin_TEST
+Excercise Device Twin with ESP32 and 4 channel Relay Module
