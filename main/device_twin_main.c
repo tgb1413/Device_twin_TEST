@@ -10,7 +10,6 @@
 #define STA_WIFI_SSID "IoT"
 #define STA_WIFI_PASS "imggd12!@#"
 
-
 EventGroupHandle_t event_group;
 
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -99,6 +98,18 @@ void wifi_init()
 
 }
 
+extern void device_twin_test_run();
+void device_twin_task()
+{
+    xEventGroupWaitBits(event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
+
+    ESP_LOGI(TAG, "Connected to AP success!");
+
+    device_twin_test_run()
+
+    vTaskDelete(NULL);
+}
+
 void app_main()
 {
     esp_err_t nvs_cfg = nvs_flash_init();
@@ -106,5 +117,12 @@ void app_main()
     {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_cfg = nvs_flash_init();
+    }
+
+    wifi_init();
+
+    if (xTaskCreate(&device_twin_task, "device_twin_task", 1024 * 5, NULL, 5, NULL) != pdTRUE)
+    {
+        printf("Create Task failed \r\n");
     }
 }
