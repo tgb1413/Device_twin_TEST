@@ -11,6 +11,7 @@
 #define STA_WIFI_PASS "imggd12!@#"
 
 EventGroupHandle_t event_group;
+const char *TAG = "WIFI STA";
 
 const int WIFI_CONNECTED_BIT = BIT0;
 /**
@@ -105,7 +106,7 @@ void device_twin_task()
 
     ESP_LOGI(TAG, "Connected to AP success!");
 
-    device_twin_test_run()
+    device_twin_test_run();
 
     vTaskDelete(NULL);
 }

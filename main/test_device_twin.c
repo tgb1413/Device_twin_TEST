@@ -26,13 +26,22 @@ typedef struct MESSAGE_TAG
     // 현재 상태와 다음 상태가 다른 지를 나타내기 위한 변수
     // 값이 -1이면 같음, index - 1 이면 다름.
     int output[4];
-    bool state[4];
+    int state[4];
 }Message;
+
+typedef struct EVENT_INSTANCE_AND_Message
+{
+    EVENT_INSTANCE event_i;
+    Message m;
+}DATA;
 
 const char* connection_string = EXAMPLE_IOTHUB_CONNECTION_STRING;
 static int iterator; 
-static int callbackCounter;
+static int deviceTwinCounter;
+static int confirmationCounter;
 static char msg_text[1024];
+
+static DATA data;
 
 /**
  * 
@@ -57,7 +66,7 @@ static char msg_text[1024];
  * Define function SendConfirmationCallback
  * - It is called whenever you send message
  * - If result is IOTHUB_CLIENT_CONFIRMATION_OK then print the detail of result and increase callback counter
- * - Destroy IOTHUB_MESSAGE
+ * - Free IOTHUB_MESSAGE_HANDLE (using 'IoTHubMessage_Destroy')
  * 
  * Define function iothub_client_sample_mqtt_run (Return type : void)
  * - Initialize platform (using 'platform_init')
@@ -143,10 +152,43 @@ static char* serializeToJson(Message* param)
     JSON_Value* root_value = json_value_init_object();
     JSON_Object* root_object = json_value_get_object(root_value);
 
-    json_object_dotset_boolean(root_object, "outlet.1", param->state[0]);
-    json_object_dotset_boolean(root_object, "outlet.2", param->state[1]);
-    json_object_dotset_boolean(root_object, "outlet.3", param->state[2]);
-    json_object_dotset_boolean(root_object, "outlet.4", param->state[3]);
+    if (param->state[0] == 1)
+    {
+        json_object_dotset_boolean(root_object, "outlet.1", true);
+    }
+    else
+    {
+        json_object_dotset_boolean(root_object, "outlet.1", false);
+    }
+
+    if (param->state[1] == 1)
+    {
+        json_object_dotset_boolean(root_object, "outlet.2", true);
+    }
+    else
+    {
+        json_object_dotset_boolean(root_object, "outlet.2", false);
+    }
+
+    if (param->state[2] == 1)
+    {
+        json_object_dotset_boolean(root_object, "outlet.3", true);
+    }
+    else
+    {
+        json_object_dotset_boolean(root_object, "outlet.3", false);
+    }
+
+    if (param->state[3] == 1)
+    {
+        json_object_dotset_boolean(root_object, "outlet.4", true);
+    }
+    else
+    {
+        json_object_dotset_boolean(root_object, "outlet.4", false);
+    }
+    (void)json_object_set_value(root_object, "temperature", NULL);
+    (void)json_object_set_value(root_object, "humidity", NULL);
     
     result = json_serialize_to_string(root_value);
     json_value_free(root_value);
@@ -156,8 +198,8 @@ static char* serializeToJson(Message* param)
 
 static Message* parseFromJson(const char* json, DEVICE_TWIN_UPDATE_STATE update_state)
 {
-    JSON_Value* root_value;
-    JSON_Object* root_object;
+    JSON_Value* root_value = NULL;
+    JSON_Object* root_object = NULL;
     Message* msg = malloc(sizeof(Message));
 
     if (msg == NULL)
@@ -172,26 +214,27 @@ static Message* parseFromJson(const char* json, DEVICE_TWIN_UPDATE_STATE update_
         JSON_Value* state[4];
         if (update_state == DEVICE_TWIN_UPDATE_COMPLETE)
         {
-            state[0] = json_object_dotget_boolean(root_object, "desired.outlet.1");
-            state[1] = json_object_dotget_boolean(root_object, "desired.outlet.2");
-            state[2] = json_object_dotget_boolean(root_object, "desired.outlet.3");
-            state[3] = json_object_dotget_boolean(root_object, "desired.outlet.4");
+            state[0] = json_object_dotget_value(root_object, "desired.outlet.1");
+            state[1] = json_object_dotget_value(root_object, "desired.outlet.2");
+            state[2] = json_object_dotget_value(root_object, "desired.outlet.3");
+            state[3] = json_object_dotget_value(root_object, "desired.outlet.4");
         }
         else
         {
-            state[0] = json_object_dotget_boolean(root_object, "outlet.1");
-            state[1] = json_object_dotget_boolean(root_object, "outlet.2");
-            state[2] = json_object_dotget_boolean(root_object, "outlet.3");
-            state[3] = json_object_dotget_boolean(root_object, "outlet.4");
+            state[0] = json_object_dotget_value(root_object, "outlet.1");
+            state[1] = json_object_dotget_value(root_object, "outlet.2");
+            state[2] = json_object_dotget_value(root_object, "outlet.3");
+            state[3] = json_object_dotget_value(root_object, "outlet.4");
         }
 
-        for(int i = 0; i < sizeof(msg->state); i++)
+        for(int i = 0; i < sizeof(msg->state)/sizeof(int); i++)
         {
             if(state[i] != NULL)
             {
                 msg->state[i] = json_value_get_boolean(state[i]);
             }
         }
+        json_value_free(root_value);
     }
     return msg;    
 }
@@ -203,12 +246,14 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
 
     if (new_msg != NULL)
     {
-        for (int i = 0; i < sizeof(new_msg->state); i++)
+        for (int i = 0; i < sizeof(new_msg->state)/sizeof(int); i++)
         {
             if(new_msg->state[i] != old_msg->state[i])
             {
+                printf("Desired outlet status changed.\r\n");
                 old_msg->state[i] = new_msg->state[i];
                 old_msg->output[i] = i;
+                deviceTwinCounter++;
             }
             else
             {
@@ -228,16 +273,21 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
 
 static void sendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result, void* userContextCallback)
 {
-    EVENT_INSTANCE* event_instance = userContextCallback;
+    DATA* data = userContextCallback;
     if (result == IOTHUB_CLIENT_CONFIRMATION_OK)
     {
-        printf("Confirmation[%d] received for message tracking id = %zu with result = %s\r\n", callbackCounter, event_instance->messageTrackingId, ENUM_TO_STRING(IOTHUB_CLIENT_CONFIRMATION_RESULT, result));
-        callbackCounter++;
+        printf("Confirmation[%d] received for message tracking id = %zu with result = %s\r\n", deviceTwinCounter, data->event_i.messageTrackingId, ENUM_TO_STRING(IOTHUB_CLIENT_CONFIRMATION_RESULT, result));
+        confirmationCounter++;
     }
-    IoTHubMessage_Destroy(event_instance -> messageHandle);
+
+    if (confirmationCounter == deviceTwinCounter - 1)
+    {
+        memset(data->m.output, -1, sizeof(data->m.output));
+        IoTHubMessage_Destroy(data->event_i.messageHandle);
+    }
 }
 
-static void reportedStateCallback() 
+static void reportedStateCallback(int status_code, void* userContextCallback) 
 {
     printf("Send reported properties to IoT Hub. \r\n");
 }
@@ -249,9 +299,10 @@ void device_twin_test_run()
     // gpio_config_t* io_config = gpio_config_init();
     // gpio_config(io_config);
 
-    EVENT_INSTANCE message;
+    // EVENT_INSTANCE message;
 
-    callbackCounter = 0;
+    deviceTwinCounter = 0;
+    confirmationCounter = 0;
     
     if (platform_init() != 0)
     {
@@ -265,63 +316,91 @@ void device_twin_test_run()
         }
         else
         {
-            Message cmsg;
-            memset(cmsg.state, 0, sizeof(cmsg.state));
-            // for (int i = 0; i < sizeof(cmsg.state); i++)
-            // {
-            //     cmsg.state[i] = false;
-            // }
-
-            int iterator = 0;
-
-            IoTHubClient_LL_SetDeviceTwinCallback(iothub_client_handle, deviceTwinCallback, &cmsg);
+            // Message cmsg;
             
+            memset(data.m.state, 0, sizeof(data.m.state));
+
+            iterator = 0;
+
+            IoTHubClient_LL_SetDeviceTwinCallback(iothub_client_handle, deviceTwinCallback, &data.m);
+            //memset(cmsg.output, -1, sizeof(cmsg.output));
             while(1)
             {
-                memset(cmsg.output, -1, sizeof(cmsg.output));
-                
-                for (int i = 0; i < sizeof(cmsg.state); i++)
+                if (iterator == 0) // boot
                 {
-                   if(cmsg.output[i] != -1
-                        && iterator < callbackCounter)
+                    sprintf_s(msg_text, sizeof(msg_text), "{\"messageId\":%d, \"boot\": true}", iterator);
+                    char* reported_properties = serializeToJson(&data.m);
+                    if ((data.event_i.messageHandle
+                                = IoTHubMessage_CreateFromByteArray((const unsigned char*)msg_text, strlen(msg_text))) == NULL)
                     {
-                        sprintf_s(msg_text, sizeof(msg_text), "{\"messageId\":\"%d\", \"outlet\":%d\", state\":", 
-                                    iterator, cmsg.output[i]);
-                        if (cmsg.state == true)
+                        printf("iothub message is null...\r\n");
+                    }
+                    else
+                    {
+                        if (IoTHubClient_LL_SendEventAsync(iothub_client_handle, data.event_i.messageHandle, sendConfirmationCallback, &data) != IOTHUB_CLIENT_OK)
                         {
-                            strcat(msg_text, "true}");
+                            printf("Failed to send a message to IOTHUB \r\n");
                         }
                         else
                         {
-                            strcat(msg_text, "false}");
+                            IoTHubClient_LL_SendReportedState(iothub_client_handle, (const unsigned char*)reported_properties, 
+                                                            strlen(reported_properties), reportedStateCallback, NULL);
+                            printf("IoTHubClient_LL_SendEventAsync accepted message [%d] for transmission to IoT Hub.\r\n", (int)iterator);
+                            
+                            // more codes needed
                         }
                         
-                        char* reported_properties = serializeToJson(&cmsg);
-
-                        if ((message.messageHandle
-                             = IoTHubMessage_CreateFromByteArray((const unsigned char*)msg_text, strlen(msg_text))) == NULL)
+                    }
+                    iterator++;
+                }
+                else 
+                {
+                    for (int i = 0; i < sizeof(data.m.state)/sizeof(int); i++)
+                    {
+                        if(data.m.output[i] != -1
+                            && iterator <= deviceTwinCounter + 1)
                         {
-                            printf("iothub message is null...\r\n");
-                        }
-                        else
-                        {
-                            if (IoTHubClient_LL_SendEventAsync(iothub_client_handle, message.messageHandle, sendConfirmationCallback, &message) != IOTHUB_CLIENT_OK)
+                            sprintf_s(msg_text, sizeof(msg_text), "{\"messageId\":%d, \"outlet\":%d, \"state\":", 
+                                    iterator, (data.m.output[i] + 1));
+                            if (data.m.state[i] == 1)
                             {
-                                printf("Failed to send a message to IOTHUB \r\n");
+                                strcat(msg_text, "true}");
+                            }
+                            else if (data.m.state[i] == 0)
+                            {
+                                strcat(msg_text, "false}");
+                            }
+                        
+                            char* reported_properties = serializeToJson(&data.m);
+
+                            if ((data.event_i.messageHandle
+                                = IoTHubMessage_CreateFromByteArray((const unsigned char*)msg_text, strlen(msg_text))) == NULL)
+                            {
+                                printf("iothub message is null...\r\n");
                             }
                             else
                             {
-                                IoTHubClient_LL_SendReportedState(iothub_client_handle, reported_properties, 
-                                                                strlen(reported_properties), reportedStateCallback, NULL);
-                                printf("IoTHubClient_LL_SendEventAsync accepted message [%d] for transmission to IoT Hub.\r\n", (int)iterator);
-                                // more codes needed
+                                if (IoTHubClient_LL_SendEventAsync(iothub_client_handle, data.event_i.messageHandle, sendConfirmationCallback, &data) != IOTHUB_CLIENT_OK)
+                                {
+                                    printf("Failed to send a message to IOTHUB \r\n");
+                                }
+                                else
+                                {
+                                    IoTHubClient_LL_SendReportedState(iothub_client_handle, (const unsigned char*)reported_properties, 
+                                                                    strlen(reported_properties), reportedStateCallback, NULL);
+                                    printf("IoTHubClient_LL_SendEventAsync accepted message [%d] for transmission to IoT Hub.\r\n", (int)iterator);
+                                    
+                                    // more codes needed
+                                }
+                                
                             }
                             
+                            iterator++;
+                            
                         }
-                        iterator++;
-                        
                     }
                 }
+                memset(data.m.output, -1, sizeof(data.m.output));
                 IoTHubClient_LL_DoWork(iothub_client_handle);
                 ThreadAPI_Sleep(1000);
             }
