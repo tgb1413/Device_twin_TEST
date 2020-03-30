@@ -12,7 +12,8 @@
 #include "iothubtransportmqtt.h"
 #include "driver/gpio.h"
 #include "parson.h"
-
+#include "esp_log.h"
+#include "esp_task_wdt.h"
 
 #define EXAMPLE_IOTHUB_CONNECTION_STRING CONFIG_IOTHUB_CONNECTION_STRING
 
@@ -43,6 +44,8 @@ static char msg_text[1024];
 
 static DATA data;
 static IOTHUB_CLIENT_LL_HANDLE iothub_client_handle;
+
+static const char* TAG = "DeviceTest";
 
 /**
  * 
@@ -132,37 +135,6 @@ static IOTHUB_CLIENT_LL_HANDLE iothub_client_handle;
 #define GPIO_OUTPUT4 27
 #define GPIO_PIN_BITMASK ((1ULL<<GPIO_OUTPUT1)|(1ULL<<GPIO_OUTPUT2)|(1ULL<<GPIO_OUTPUT3)|(1ULL<<GPIO_OUTPUT4))
 
-static xQueueHandle queue = NULL;
-
-static gpio_config_t* gpio_config_init()
-{
-    gpio_config_t io_config;
-    
-    io_config.intr_type = GPIO_PIN_INTR_DISABLE;
-    io_config.mode = GPIO_MODE_OUTPUT;
-    io_config.pin_bit_mask = GPIO_PIN_BITMASK;
-    io_config.pull_up_en = 0;
-    io_config.pull_down_en = 0;
-
-    return &io_config;
-}
-
-static void gpio_task(void* arg)
-{
-    uint32_t io_num;
-    for(;;) {
-        if(xQueueReceive(queue, &io_num, portMAX_DELAY)) {
-            printf("GPIO\n");
-        }
-    }
-    // uint32_t io_num;
-    // for(;;) {
-    //     if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-    //         printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
-    //     }
-    // }
-}
-
 static char* serializeToJson(Message* param)
 {
     char* result;
@@ -205,8 +177,8 @@ static char* serializeToJson(Message* param)
     {
         json_object_dotset_boolean(root_object, "outlet.4", false);
     }
-    (void)json_object_set_value(root_object, "temperature", NULL);
-    (void)json_object_set_value(root_object, "humidity", NULL);
+    json_object_set_value(root_object, "temperature", NULL);
+    json_object_set_value(root_object, "humidity", NULL);
     
     result = json_serialize_to_string(root_value);
     json_value_free(root_value);
@@ -229,28 +201,28 @@ static Message* parseFromJson(const char* json, DEVICE_TWIN_UPDATE_STATE update_
         root_value = json_parse_string(json);
         root_object = json_value_get_object(root_value);
 
-        JSON_Value* state[4];
+        int state[4];
         if (update_state == DEVICE_TWIN_UPDATE_COMPLETE)
         {
-            state[0] = json_object_dotget_value(root_object, "desired.outlet.1");
-            state[1] = json_object_dotget_value(root_object, "desired.outlet.2");
-            state[2] = json_object_dotget_value(root_object, "desired.outlet.3");
-            state[3] = json_object_dotget_value(root_object, "desired.outlet.4");
+            printf("first update\r\n");
+            state[0] = json_object_dotget_boolean(root_object, "desired.outlet.1");
+            state[1] = json_object_dotget_boolean(root_object, "desired.outlet.2");
+            state[2] = json_object_dotget_boolean(root_object, "desired.outlet.3");
+            state[3] = json_object_dotget_boolean(root_object, "desired.outlet.4");
         }
         else
         {
-            state[0] = json_object_dotget_value(root_object, "outlet.1");
-            state[1] = json_object_dotget_value(root_object, "outlet.2");
-            state[2] = json_object_dotget_value(root_object, "outlet.3");
-            state[3] = json_object_dotget_value(root_object, "outlet.4");
+            printf("update\r\n");
+            state[0] = json_object_dotget_boolean(root_object, "outlet.1");
+            state[1] = json_object_dotget_boolean(root_object, "outlet.2");
+            state[2] = json_object_dotget_boolean(root_object, "outlet.3");
+            state[3] = json_object_dotget_boolean(root_object, "outlet.4");
         }
 
         for(int i = 0; i < sizeof(msg->state)/sizeof(int); i++)
         {
-            if(state[i] != NULL)
-            {
-                msg->state[i] = json_value_get_boolean(state[i]);
-            }
+            msg->state[i] = state[i];
+            printf("save index: %d value: %d\r\n",i,  msg->state[i]);
         }
         json_value_free(root_value);
     }
@@ -266,11 +238,14 @@ static void sendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result, v
         confirmationCounter++;
     }
 
-    if (confirmationCounter == deviceTwinCounter)
-    {
-        memset(data->m.output, -1, sizeof(data->m.output));
-        IoTHubMessage_Destroy(data->event_i.messageHandle);
-    }
+    // printf("confirmationCounter : %d deviceTwinCounter : %d\r\n", confirmationCounter, deviceTwinCounter);
+    // if (confirmationCounter == deviceTwinCounter)
+    // {
+    //     memset(data->m.output, -1, sizeof(data->m.output));
+    //     IoTHubMessage_Destroy(data->event_i.messageHandle); ////////////////////////
+    //     printf("destory\r\n");
+
+    // }
 }
 
 static void reportedStateCallback(int status_code, void* userContextCallback) 
@@ -281,23 +256,27 @@ static void reportedStateCallback(int status_code, void* userContextCallback)
 static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsigned char* payload, size_t size, void* userContextCallback)
 {
     DATA* data = userContextCallback;
-    Message* old_msg = &data->m;
+    //Message* old_msg = &data->m;
     Message* new_msg = parseFromJson((const char*)payload, update_state);
-
+    
     if (new_msg != NULL)
     {
-        for (int i = 0; i < sizeof(new_msg->state)/sizeof(int); i++)
+        for (int i = 0; i < sizeof(new_msg->output)/sizeof(int); i++)
         {
-            if(new_msg->state[i] != old_msg->state[i])
+            if(new_msg->state[i] != data->m.state[i])
             {
                 printf("Desired outlet status changed.\r\n");
-                old_msg->state[i] = new_msg->state[i];
-                old_msg->output[i] = i;
+                if(new_msg->state[i]){
+                    data->m.state[i] = 1;
+                }else {
+                    data->m.state[i] = 0;
+                }
+                data->m.output[i] = i;
                 deviceTwinCounter++;
             }
             else
             {
-                old_msg->output[i] = -1;
+                data->m.output[i] = -1;
             }
             
         }
@@ -326,8 +305,10 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
             }
             else
             {
-                IoTHubClient_LL_SendReportedState(iothub_client_handle, (const unsigned char*)reported_properties, 
-                                                strlen(reported_properties), reportedStateCallback, NULL);
+                if(IoTHubClient_LL_SendReportedState(iothub_client_handle, (const unsigned char*)reported_properties, 
+                                                strlen(reported_properties), reportedStateCallback, NULL)!=IOTHUB_CLIENT_OK){
+                    printf("Failed to send a twin to IOTHUB \r\n");
+                };
                 printf("IoTHubClient_LL_SendEventAsync accepted boot message for transmission to IoT Hub.\r\n");
 
             }
@@ -337,7 +318,7 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
     }
     else 
     {
-        for (int i = 0; i < sizeof(data->m.state)/sizeof(int); i++)
+        for (int i = 0; i < sizeof(data->m.output)/sizeof(int); i++)
         {
             if(data->m.output[i] != -1)
             {
@@ -419,6 +400,7 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
 
 void device_twin_test_run()
 {
+    esp_log_level_set("*", ESP_LOG_ERROR);
     gpio_config_t io_config;
     
     io_config.intr_type = GPIO_PIN_INTR_DISABLE;

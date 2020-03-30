@@ -122,7 +122,7 @@ void app_main()
 
     wifi_init();
 
-    if (xTaskCreate(&device_twin_task, "device_twin_task", 1024 * 5, NULL, 5, NULL) != pdTRUE)
+    if (xTaskCreate(&device_twin_task, "device_twin_task", 1024 * 6, NULL, 5, NULL) != pdTRUE)
     {
         printf("Create Task failed \r\n");
     }
