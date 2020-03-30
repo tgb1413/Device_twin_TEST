@@ -12,8 +12,6 @@
 #include "iothubtransportmqtt.h"
 #include "driver/gpio.h"
 #include "parson.h"
-#include "esp_log.h"
-#include "esp_task_wdt.h"
 
 #define EXAMPLE_IOTHUB_CONNECTION_STRING CONFIG_IOTHUB_CONNECTION_STRING
 
@@ -38,8 +36,6 @@ typedef struct EVENT_INSTANCE_AND_Message
 
 const char* connection_string = EXAMPLE_IOTHUB_CONNECTION_STRING;
 static int iterator; 
-static int deviceTwinCounter;
-static int confirmationCounter;
 static char msg_text[1024];
 
 static DATA data;
@@ -234,8 +230,7 @@ static void sendConfirmationCallback(IOTHUB_CLIENT_CONFIRMATION_RESULT result, v
     DATA* data = userContextCallback;
     if (result == IOTHUB_CLIENT_CONFIRMATION_OK)
     {
-        printf("Confirmation[%d] received for message tracking id = %zu with result = %s\r\n", deviceTwinCounter, data->event_i.messageTrackingId, ENUM_TO_STRING(IOTHUB_CLIENT_CONFIRMATION_RESULT, result));
-        confirmationCounter++;
+        printf("Confirmation received with result = %s\r\n", ENUM_TO_STRING(IOTHUB_CLIENT_CONFIRMATION_RESULT, result));
     }
 
     // printf("confirmationCounter : %d deviceTwinCounter : %d\r\n", confirmationCounter, deviceTwinCounter);
@@ -272,7 +267,6 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
                     data->m.state[i] = 0;
                 }
                 data->m.output[i] = i;
-                deviceTwinCounter++;
             }
             else
             {
@@ -348,8 +342,6 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
                     }
                     else
                     {
-                        //sendReportedCounter++;
-                        //if (sendReportedCounter == deviceTwinCounter - 1)
                         IoTHubClient_LL_SendReportedState(iothub_client_handle, (const unsigned char*)reported_properties, 
                                                         strlen(reported_properties), reportedStateCallback, NULL);
                         printf("IoTHubClient_LL_SendEventAsync accepted message [%d] for transmission to IoT Hub.\r\n", (int)iterator);
@@ -400,7 +392,6 @@ static void deviceTwinCallback(DEVICE_TWIN_UPDATE_STATE update_state, const unsi
 
 void device_twin_test_run()
 {
-    esp_log_level_set("*", ESP_LOG_ERROR);
     gpio_config_t io_config;
     
     io_config.intr_type = GPIO_PIN_INTR_DISABLE;
@@ -409,10 +400,6 @@ void device_twin_test_run()
     io_config.pull_up_en = 0;
     io_config.pull_down_en = 0;
     gpio_config(&io_config);
-
-    deviceTwinCounter = 0;
-    confirmationCounter = 0;
-    int sendReportedCounter = 0;
     
     if (platform_init() != 0)
     {
